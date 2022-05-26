@@ -322,6 +322,7 @@ class mainWindow(QWidget):
 
             info = self.portCombo.currentData()
             if info[1] == 1155:
+                print("DFU")
                 self.stopBtn.setEnabled(False)
                 self.statusBar.showMessage("Serial to DFU...")
                 serial = QSerialPort(self)
@@ -350,6 +351,7 @@ class mainWindow(QWidget):
                 # self.task.start()
 
             elif info[1] != 0:
+                print("串口")
                 self.stopBtn.setEnabled(True)
                 self.task = stk500v2Thread(self, info[0], int(self.baudCombo.currentText()),
                                            self.file.text(), self.progressUpdate)

@@ -114,18 +114,6 @@ def init(**kwargs):
     """Initializes the found DFU device so that we can program it."""
     global __dev, __cfg_descr
     devices = get_dfu_devices(**kwargs)
-
-    # Waiting 2 seconds before trying again..."
-    attempts = 0
-    while not devices:
-        devices = get_dfu_devices(**kwargs)
-        attempts += 1
-        print(" + str(attempts) + ", attempts)
-        time.sleep(2)
-        # # 尝试5次后，报错
-        # if attempts >= 5:
-        #     break
-
     if not devices:
         raise ValueError("No DFU device found")
     if len(devices) > 1:
@@ -866,9 +854,9 @@ class DFUTool(QThread):
         self.speed = speed
         self.filename = filename
         self.callback = callback
-        self.programmer = None
         self.isWork = False
         self.finished.connect(self.done)
+        print("__init__")
 
         global __verbose
         # Parse CMD args
@@ -912,12 +900,14 @@ class DFUTool(QThread):
 
         def w(state):
             if state is False:
+                print("未找到DFU")
                 self.stateCallback[Exception].emit(portError(portError.errorOpen, port))
                 self.stateCallback[str].emit("Done!")
                 self.quit()
                 return
 
             try:
+                print("找到DFU")
                 self.thread.exit()
                 init(**kwargs)
                 self.start()
@@ -940,8 +930,10 @@ class DFUTool(QThread):
         print("QMetaObject_Connection")
 
     def run(self):
+        print("run")
         self.isWork = True
         try:
+            print("try")
             with open(self.args.path, "rb") as fin:
                 dfu_file = fin.read()
 
@@ -949,8 +941,6 @@ class DFUTool(QThread):
                 print("file is None")
                 return
             elem = {"addr": 134217728, "size": len(dfu_file), "data": dfu_file}
-
-            self.programmer = STM32Dev()
 
             if self.callback is not None:
                 self.progressCallback.connect(self.callback)
@@ -960,9 +950,9 @@ class DFUTool(QThread):
 
             else:
                 self.stateCallback[str].emit(self.tr("Programming..."))
-                # self.programmer.
                 write_elements([elem], self.args.mass_erase, progress=self.cl_progress)
             exit_dfu()  # 退出DFU模式
+            print("exit_dfu")
         except Exception as err:
             if self.isInterruptionRequested():
                 print("int")
@@ -976,23 +966,9 @@ class DFUTool(QThread):
             self.isWork = False
         finally:
             self.stateCallback[str].emit("Done!")
-            self.programmer = None
 
     def isReady(self):
         return True
-        return self.programmer is not None and self.programmer.isConnected()
-
-        try:
-            status = get_status()
-            print(status)
-
-            if status[1] == 0x02:
-                return True
-            return False
-
-        except Exception as err:
-            print("isReady", err)
-            return False
 
     def done(self):
         print("结束烧录程序")
@@ -1025,6 +1001,7 @@ class DFUSearch(QThread):
 
     def run(self):
         # 耗时内容
+        print("self.kwargs", self.kwargs)
         devices = get_dfu_devices(**self.kwargs)
         # Waiting 2 seconds before trying again..."
         attempts = 0
