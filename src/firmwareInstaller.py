@@ -6,13 +6,12 @@ Created on 2017年8月15日
 
 import os
 import sys
-import time
 
-from PyQt5 import QtSerialPort, QtCore, QtWidgets
+from PyQt5 import QtCore
 from PyQt5.Qt import pyqtSignal
 from PyQt5.QtCore import QSize, QDir, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtSerialPort import QSerialPortInfo
+from PyQt5.QtSerialPort import QSerialPortInfo, QSerialPort
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGroupBox, \
     QRadioButton, QGridLayout, QWidget, QProgressBar, QStatusBar, QComboBox, QLabel, \
     QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QCheckBox
@@ -20,8 +19,6 @@ from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGroupBox, \
 from avr_isp.intelHex import formatError
 from avr_isp.ispBase import IspError
 from avr_isp.stk500v2 import stk500v2Thread, portError
-
-# from DfuseTool import DfuseTool as DFUse
 from pydfu import DFUTool as DFUse
 
 if getattr(sys, 'frozen', False):
@@ -64,20 +61,17 @@ class mainWindow(QWidget):
 
     def __init__(self):
         super(mainWindow, self).__init__()
-        self.setWindowTitle(self.tr("Firmware Installer"))
+        self.setWindowTitle(self.tr("Firmware Installer" + " V3.1.0"))
         self.setWindowIcon(QIcon(os.path.join(bundle_dir, "ico.ico")))
         self.setFixedSize(QSize(480, 240))
         self.setAcceptDrops(True)
 
         self.portUpdateTimer = QTimer()
         self.portUpdateTimer.timeout.connect(self.portUpdate)
-        self.portUpdateTimer.start(200)
-
+        self.portUpdateTimer.start(100)
         self.autoTimer = QTimer()
         # self.autoTimer.setSingleShot(True)
-        self.autoTimer.timeout.connect(self.portUpdate)
-        # self.autoTimer.start(1000)
-
+        self.autoTimer.timeout.connect(self.installFile)
         self.task = None
 
         self.initUI()
@@ -135,7 +129,7 @@ class mainWindow(QWidget):
         self.autoCheck = QCheckBox(self.tr("Auto Install"))
         self.autoTimeLabel = QLabel(self.tr("Idle Time:"))
         self.autoTimeLabel2 = QLabel(self.tr("s"))
-        self.autoTime = QLineEdit("3")
+        self.autoTime = QLineEdit("2")
         self.autoTime.setInputMask("00")
         self.autoTime.setMaximumWidth(20)
 
@@ -174,8 +168,7 @@ class mainWindow(QWidget):
         # 计数栏
         self.countBar = QStatusBar()
         self.countBar.setSizeGripEnabled(False)
-        self.countBar.setStyleSheet(
-            "QStatusBar::item { border: 0 } QLabel {border:0; font-size: 14px; font-weight: bold}")
+        self.countBar.setStyleSheet("QStatusBar::item { border: 0 } QLabel {border:0; font-size: 14px; font-weight: bold}")
         countSuccessLabel = QLabel("Success: ")
         countFailureLabel = QLabel("Failure: ")
         self.countSuccess = countLabel("0")
@@ -231,9 +224,9 @@ class mainWindow(QWidget):
         self.statusBar.messageChanged.connect(self.stateClearAction)
 
         # 默认选中
+        self.autoCheck.click()
+        self.autoCheck.click()
         self.autoRadio.click()
-        # self.manualRadio.click()
-        # self.autoCheck.click()
 
         self.fileBtn.clicked.connect(self.selectFile)
         self.installBtn.clicked.connect(self.installFile)
@@ -244,36 +237,24 @@ class mainWindow(QWidget):
 
     def portUpdate(self, forceUpdate=False):
         """ Auto 监听端口 """
-        print("search port")
         if self.autoRadio.isChecked():
-
             self.baudCombo.setCurrentText("115200")
             # self.portCombo.addItems(portList())
-            # self.portCombo.clear()
-            port_list = QSerialPortInfo.availablePorts()
-            for port in port_list:
-                print(':--:', port.portName(), port.description())
-                if port.description() not in ["Arduino Mega 2560", "USB-SERIAL CH340"]:  # 过滤2560和CH340
+            self.portCombo.clear()
+            for port in QSerialPortInfo.availablePorts():
+                if port.description() not in ["Arduino Mega 2560", "USB-SERIAL CH340", "USB 串行设备"]:  # 过滤2560和CH340
                     continue
-                self.portCombo.addItem(port.portName() + " (" + port.description() + ")", port.portName())
-
-            if len(port_list) > 0:
-                port = port_list[0]
-                info = QSerialPortInfo(port)
-                print(info.productIdentifier())
-                if info.productIdentifier() == 0:
-                    return
-                if not self.installBtn.isEnabled():
-                    self.installFile()
-
+                portInfo = QSerialPortInfo(port)
+                self.portCombo.addItem(port.portName() + " (" + port.description() + ")", (port.portName(), portInfo.vendorIdentifier()))
         else:
-            currentPortData = self.portCombo.currentData()
-            if forceUpdate or (currentPortData and currentPortData not in [port.portName() for port in
-                                                                           QSerialPortInfo.availablePorts()]):
+            currentPortData = self.portCombo.currentText()
+            if forceUpdate or (currentPortData and currentPortData not in [port.portName() for port in QSerialPortInfo.availablePorts()]):
                 self.portCombo.clear()
                 for port in QSerialPortInfo.availablePorts():
-                    self.portCombo.addItem(port.portName() + " (" + port.description() + ")", port.portName())
-                self.portCombo.setCurrentIndex(self.portCombo.findData(currentPortData))
+                    portInfo = QSerialPortInfo(port)
+                    self.portCombo.addItem(port.portName() + " (" + port.description() + ")",
+                                           (port.portName(), portInfo.vendorIdentifier()))
+                self.portCombo.setCurrentIndex(self.portCombo.findText(currentPortData))
 
         self.portCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.baudCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -284,14 +265,6 @@ class mainWindow(QWidget):
     def autoStateChangeAction(self, check):
         if not check and self.autoTimer.remainingTime() > 0:
             self.stopInstall()
-
-        if check:
-            #  开启自动安装的端口扫描
-            self.portUpdateTimer.stop()
-            self.autoTimer.start(int(self.autoTime.text())*1000)
-        else:
-            self.autoTimer.stop()
-            self.portUpdateTimer.start(200)
 
     def autoTimeChangeAction(self):
         """ 修改时间间隔 """
@@ -329,65 +302,35 @@ class mainWindow(QWidget):
             self.file.setText(hexFileDialog.selectedFiles()[0])
 
     def installFile(self, notFromButton=True):
-        """ 开始安装 """
-        print("-------------------开始安装-------------------")
-        # for port in QSerialPortInfo.availablePorts():
-        #     print('port.description===', port.portName())
-        #     print('port.description===', port.description())
-        #     info = QSerialPortInfo(port)
-        #     print(info.productIdentifier())
-        #     print(info.vendorIdentifier())
+        if self.portCombo.currentData() is None:
+            return
 
         if self.file.text() == "":
             if not notFromButton:
                 self.selectFile()
                 self.installFile(True)
         else:
-            if self.autoTimer.remainingTime() > 0:
+            if self.autoTimer.remainingTime() != -1:
                 self.autoTimer.stop()
 
-            port_list = QSerialPortInfo.availablePorts()
-            if len(port_list) <= 0:
-                QtWidgets.QMessageBox.about(self, "提示", "没有可用的串口!")
-                return
+            self.portBox.setDisabled(True)
+            self.fileBox.setDisabled(True)
+            self.installBtn.setDisabled(True)
 
-            port = port_list[0]
-            info = QSerialPortInfo(port)
+            self.progress.show()
+            self.resize()
 
-            port_Name = None
-            baud_rate = None
-            if self.manualRadio.isChecked():
-                if self.portCombo.currentData() is None:
-                    QtWidgets.QMessageBox.about(self, "提示", "请选择串口设备")
-                    return
-                else:
-                    port_Name = self.portCombo.currentData()
-                    baud_rate = int(self.baudCombo.currentText())
-
-            else:
-                port_Name = info.portName()
-                baud_rate = QtSerialPort.QSerialPort.Baud115200
-
-            print("port:", port_Name)
-            print("baudCombo:", baud_rate)
-            print(info.portName())
-            print(info.description())
-            print(info.productIdentifier())
-            print(info.vendorIdentifier())
-            if info.productIdentifier() == 0:
-                self.autoTimer.start(1000)
-                pass
-
-            if info.vendorIdentifier() == 1155:
-                print("------命令开启DFU模式 start------")
+            info = self.portCombo.currentData()
+            if info[1] == 1155:
+                self.stopBtn.setEnabled(False)
                 self.statusBar.showMessage("Serial to DFU...")
-                serial = QtSerialPort.QSerialPort(self)
-                serial.setPortName(port_Name)
-                serial.setBaudRate(baud_rate)
-                serial.setDataBits(QtSerialPort.QSerialPort.Data8)
-                serial.setParity(QtSerialPort.QSerialPort.NoParity)
-                serial.setStopBits(QtSerialPort.QSerialPort.OneStop)
-                serial.setFlowControl(QtSerialPort.QSerialPort.NoFlowControl)
+                serial = QSerialPort(self)
+                serial.setPortName(info[0])
+                serial.setBaudRate(QSerialPort.Baud115200)
+                serial.setDataBits(QSerialPort.Data8)
+                serial.setParity(QSerialPort.NoParity)
+                serial.setStopBits(QSerialPort.OneStop)
+                serial.setFlowControl(QSerialPort.NoFlowControl)
 
                 if not serial.open(QtCore.QIODevice.ReadWrite):
                     # QtWidgets.QMessageBox.about(self, "提示", "无法打开串口!")
@@ -396,31 +339,49 @@ class mainWindow(QWidget):
                 data = bytes("M9999\r", encoding='utf-8')
                 data = QtCore.QByteArray(data)
                 serial.write(data)
-                print("------命令开启DFU模式 end------")
+
                 self.statusBar.showMessage("Serial to dfu...")
 
-                self.task = DFUse(self, self.file.text(), self.progressUpdate)
+                self.task = DFUse(self, self.portCombo.currentData()[0], int(self.baudCombo.currentText()), self.file.text(),
+                                  self.progressUpdate)
                 self.task.stateCallback[str].connect(self.stateUpdate)
                 self.task.stateCallback[Exception].connect(self.stateUpdate)
                 self.task.finished.connect(self.autoAction)  # 检查是否自动烧写，并启动。
                 # self.task.start()
 
-            elif info.vendorIdentifier() != 0:
-                self.task = stk500v2Thread(self, self.portCombo.currentData(), int(self.baudCombo.currentText()),
+            elif info[1] != 0:
+                self.stopBtn.setEnabled(True)
+                self.task = stk500v2Thread(self, info[0], int(self.baudCombo.currentText()),
                                            self.file.text(), self.progressUpdate)
                 self.task.stateCallback[str].connect(self.stateUpdate)
                 self.task.stateCallback[Exception].connect(self.stateUpdate)
                 self.task.finished.connect(self.autoAction)
                 self.task.start()
 
-            # 开始烧录，刷新UI
-            # self.statusBar.showMessage(" ")
+        return
+
+        if self.file.text() == "":
+            if not notFromButton:
+                self.selectFile()
+                self.installFile(True)
+        else:
+            if self.autoTimer.remainingTime() != -1:
+                self.autoTimer.stop()
+
             self.portBox.setDisabled(True)
             self.fileBox.setDisabled(True)
             self.installBtn.setDisabled(True)
             self.stopBtn.setEnabled(True)
             self.progress.show()
             self.resize()
+
+            self.task = DFUse(self, self.portCombo.currentData()[0], int(self.baudCombo.currentText()), self.file.text(),
+                              self.progressUpdate)
+            self.task.stateCallback[str].connect(self.stateUpdate)
+            self.task.stateCallback[Exception].connect(self.stateUpdate)
+            self.task.finished.connect(self.autoAction)
+            self.task.start()
+            self.statusBar.showMessage(" ")
 
     def stopInstall(self, succeed=False, autoInstall=False):
         """ 停止自动安装 """
@@ -440,8 +401,8 @@ class mainWindow(QWidget):
             self.countSuccess.setText(str(int(self.countSuccess.text()) + 1))
             self.task = None
         else:
-            # if self.autoTimer.remainingTime() != -1:
-            #     self.autoTimer.stop()
+            if self.autoTimer.remainingTime() != -1:
+                self.autoTimer.stop()
             if self.task is not None and self.task.isRunning():
                 self.task.finished.disconnect()
                 if self.task.isReady():
@@ -459,14 +420,10 @@ class mainWindow(QWidget):
 
     def autoAction(self):
         """ 上一个任务结束后，开启新的烧录任务 """
-        self.task = None
-        self.statusBar.showMessage("Done!")
+        self.stopBtn.setEnabled(True)
         self.stopInstall(True, self.autoCheck.isChecked())
-
         #  开启自动安装
         if self.autoCheck.isChecked():
-            if self.autoTimer.remainingTime() > 0:
-                self.autoTimer.stop()
             self.autoTimer.start(int(self.autoTime.text()) * 1000)
 
     def resize(self):
@@ -481,31 +438,24 @@ class mainWindow(QWidget):
         """ 安装状态 """
         self.tryAgainLabel.setHidden(True)
         self.tryAgain.setHidden(True)
-        if self.task.isReady():
-            self.tryAgain.setText("0")
+        # if self.task.isReady():
+        #     self.tryAgain.setText("0")
 
-        print(stateOrError, str)
         if type(stateOrError) == str:
-            print("222---")
             # 		self.statusBar.setStyleSheet("QStatusBar::item { border: 0 } QLabel {color: red; font-weight: bold}")
             self.statusBar.setStyleSheet(
                 "QStatusBar {font-weight: bold; color: black}  QStatusBar::item { border: 0 } QLabel {font-weight: bold}")
             if self.task is not None and not self.task.isWork and not self.autoCheck.isChecked():
-                print("statusBar---")
                 self.statusBar.showMessage(stateOrError, 3000)
             else:
-                print("else---")
                 self.statusBar.showMessage(stateOrError)
-
         else:
-            print("333---")
             self.task.requestInterruption()
             self.statusBar.setStyleSheet(
                 "QStatusBar {font-weight: bold; color: red} QStatusBar::item { border: 0 } QLabel {font-weight: bold; color: red}")
 
             if type(stateOrError) == portError:
-                if (stateOrError.value in [portError.errorInvalid, portError.errorBusy]) and (
-                        int(self.tryAgain.text()) < 20):
+                if (stateOrError.value in [portError.errorInvalid, portError.errorBusy]) and (int(self.tryAgain.text()) < 20):
                     self.statusBar.showMessage("PortError: " + str(stateOrError))
                     self.tryAgain.setText(str(int(self.tryAgain.text()) + 1))
                     self.tryAgainLabel.setVisible(True)
@@ -531,7 +481,6 @@ class mainWindow(QWidget):
             else:
                 self.statusBar.showMessage("Error: " + str(stateOrError), 5000)
                 self.stopInstall()
-            print("1111---")
 
             self.task.isWork = False
             self.task.wait(100)
@@ -539,7 +488,6 @@ class mainWindow(QWidget):
 
 
 if __name__ == '__main__':
-
     app = QApplication(sys.argv)
 
     win = mainWindow()

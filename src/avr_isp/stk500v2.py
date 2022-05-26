@@ -8,14 +8,14 @@ Created on 2017年8月15日
 # The STK500v2 protocol is used by the ArduinoMega2560 and a few other Arduino platforms to load firmware.
 # ===============================================================================
 
-import struct, sys
-import time
+import struct
+import sys
 
 from PyQt5.QtCore import QIODevice, QThread, pyqtSignal
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
 from PyQt5.QtWidgets import QApplication
-
 from avr_isp import intelHex, ispBase
+
 from .errorBase import portError
 
 
@@ -88,10 +88,8 @@ class Stk500v2(ispBase.IspBase, QSerialPort):
 
         loadCount = (len(flashData) + pageSize - 1) // pageSize
         for i in range(0, loadCount):
-            self.sendMessage(
-                [0x13, pageSize >> 8, pageSize & 0xFF, 0xc1, 0x0a, 0x40, 0x4c, 0x20, 0x00, 0x00] + flashData[
-                                                                                                   (i * pageSize):(
-                                                                                                               i * pageSize + pageSize)])
+            self.sendMessage([0x13, pageSize >> 8, pageSize & 0xFF, 0xc1, 0x0a, 0x40, 0x4c, 0x20, 0x00, 0x00] + flashData[(i * pageSize):(
+                    i * pageSize + pageSize)])
             self.progressCallback.emit(i + 1, loadCount * 2)
 
     def verifyFlash(self, flashData):
@@ -191,9 +189,8 @@ class stk500v2Thread(QThread):
         self.finished.connect(self.done)
 
     def run(self):
-
+        self.isWork = True
         try:
-            self.isWork = True
             self.programmer = Stk500v2()
             if self.callback is not None:
                 self.programmer.progressCallback.connect(self.callback)
@@ -201,26 +198,24 @@ class stk500v2Thread(QThread):
             if self.parent is None:
                 runProgrammer(self.port, self.speed, self.filename, self.programmer)
             else:
-                self.stateCallback[str].emit(self.tr("Connecting.."))
+                self.stateCallback[str].emit(self.tr("Connecting..."))
                 self.msleep(200)
                 self.programmer.connect(self.port, self.speed)
 
                 self.stateCallback[str].emit(self.tr("Programming..."))
                 self.programmer.programChip(intelHex.readHex(self.filename))
-
         except Exception as e:
             if self.isInterruptionRequested():
                 print("Int")
             else:
                 if self.parent is not None:
                     self.stateCallback[Exception].emit(e)
-                    # while self.isWork:
-                    #     pass  # 等待父进程处理异常
+                    while self.isWork:
+                        pass  # 等待父进程处理异常
                 else:
                     raise e
             self.isWork = False
         finally:
-            self.isWork = False
             if self.programmer.isConnected():
                 self.programmer.fastReset()
                 self.programmer.close()
@@ -266,8 +261,7 @@ def main():
             programmer.programChip(intelHex.readHex(sys.argv[2]))
         else:
             programmer.connect("COM4")
-            programmer.programChip(
-                intelHex.readHex("D:/OneDrive/Desktop/CreatBot F160 01 EN KTC ( AUTO_LEVELING ).hex"))
+            programmer.programChip(intelHex.readHex("D:/OneDrive/Desktop/CreatBot F160 01 EN KTC ( AUTO_LEVELING ).hex"))
     except portError as e:
         print(e.value)
         print("PortError: " + str(e))

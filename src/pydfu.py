@@ -18,10 +18,12 @@ import collections
 import inspect
 import re
 import struct
-import sys, time
+import sys
+import time
+import zlib
+
 import usb.core
 import usb.util
-import zlib
 
 # USB request __TIMEOUT
 __TIMEOUT = 4000
@@ -658,24 +660,213 @@ def main():
 # if __name__ == "__main__":
 #     main()
 
-from avr_isp.errorBase import portError
-
-from PyQt5.QtCore import QIODevice, QThread, pyqtSignal
+from PyQt5.QtCore import QIODevice, QThread, pyqtSignal, QByteArray
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
 from PyQt5.QtWidgets import QApplication
+
+from avr_isp import ispBase
+from avr_isp.errorBase import portError
+
+
+class STM32Dev(ispBase.IspBase, QSerialPort):
+    progressCallback = pyqtSignal(int, int)
+
+    def __init__(self):
+        super(STM32Dev, self).__init__()
+        self.seq = 1
+        self.lastAddr = -1
+        self.portInfo = None
+
+    def connect(self, port='COM4', speed=115200):
+        print("connect", port)
+        self.portInfo = QSerialPortInfo(port)
+        print("portInfo", self.portInfo)
+        self.setPortName(port)
+        # self.setBaudRate(speed)
+        # self.setPortName("COM3")
+        self.setBaudRate(QSerialPort.Baud115200)
+        self.setDataBits(QSerialPort.Data8)
+        self.setParity(QSerialPort.NoParity)
+        self.setStopBits(QSerialPort.OneStop)
+        self.setFlowControl(QSerialPort.NoFlowControl)
+
+        if self.portInfo.isNull():
+            raise portError(portError.errorInvalid, port)
+        else:
+            if self.portInfo.isBusy():
+                raise portError(portError.errorBusy, port)
+            else:
+                if self.open(QIODevice.ReadWrite):
+                    # 						self.setBreakEnabled()
+                    print("open")
+                    # self.entryISP()
+                    print("open--end")
+                else:
+                    raise portError(portError.errorOpen, port)
+
+    def close(self):
+        super(STM32Dev, self).close()
+        self.portInfo = None
+
+    def serial_DFU(self):
+        print("serial_DFU")
+        # if not self.open(QIODevice.ReadWrite):
+        #     # QtWidgets.QMessageBox.about(self, "提示", "无法打开串口!")
+        #     return
+        print("1111")
+        data = bytes("M9999\r", encoding='utf-8')
+        data = QByteArray(data)
+        print("2222")
+        # self.write(data)
+        print(self.write(data))
+        print("serial_DFU---end")
+        self.close()
+
+    def entryISP(self):
+        self.seq = 1
+        # Reset the controller
+        self.setDataTerminalReady(True)
+        QThread.msleep(100)
+        self.setDataTerminalReady(False)
+        QThread.msleep(200)
+        self.clear()
+        print("=====")
+
+        recv = self.sendMessage([1])[3:]
+        if "".join([chr(c) for c in recv]) != "AVRISP_2":
+            raise ispBase.IspError("Unkonwn bootloaders!")
+
+        if self.sendMessage([0x10, 0xc8, 0x64, 0x19, 0x20, 0x00, 0x53, 0x03, 0xac, 0x53, 0x00, 0x00]) != [0x10, 0x00]:
+            raise ispBase.IspError("Failed to enter programming mode!")
+
+    def leaveISP(self):
+        if self.portInfo is not None:
+            if self.sendMessage([0x11]) != [0x11, 0x00]:
+                raise ispBase.IspError("Failed to leave programming mode!")
+
+    def isConnected(self):
+        return self.isOpen()
+
+    def sendISP(self, data):
+        recv = self.sendMessage([0x1D, 4, 4, 0, data[0], data[1], data[2], data[3]])
+        return recv[2:6]
+
+    def writeFlash(self, flashData):
+        # Set load addr to 0, in case we have more then 64k flash we need to enable the address extension
+        pageSize = self.chip['pageSize'] * 2
+        flashSize = pageSize * self.chip['pageCount']
+        if flashSize > 0xFFFF:
+            self.sendMessage([0x06, 0x80, 0x00, 0x00, 0x00])
+        else:
+            self.sendMessage([0x06, 0x00, 0x00, 0x00, 0x00])
+
+        loadCount = (len(flashData) + pageSize - 1) // pageSize
+        for i in range(0, loadCount):
+            self.sendMessage([0x13, pageSize >> 8, pageSize & 0xFF, 0xc1, 0x0a, 0x40, 0x4c, 0x20, 0x00, 0x00] + flashData[(i * pageSize):(
+                    i * pageSize + pageSize)])
+            self.progressCallback.emit(i + 1, loadCount * 2)
+
+    def verifyFlash(self, flashData):
+        # Set load addr to 0, in case we have more then 64k flash we need to enable the address extension
+        flashSize = self.chip['pageSize'] * 2 * self.chip['pageCount']
+        if flashSize > 0xFFFF:
+            self.sendMessage([0x06, 0x80, 0x00, 0x00, 0x00])
+        else:
+            self.sendMessage([0x06, 0x00, 0x00, 0x00, 0x00])
+
+        loadCount = (len(flashData) + 0xFF) // 0x100
+        for i in range(0, loadCount):
+            recv = self.sendMessage([0x14, 0x01, 0x00, 0x20])[2:0x102]
+            self.progressCallback.emit(loadCount + i + 1, loadCount * 2)
+            for j in range(0, 0x100):
+                if i * 0x100 + j < len(flashData) and flashData[i * 0x100 + j] != recv[j]:
+                    raise ispBase.IspError('Verify error at: 0x%x' % (i * 0x100 + j))
+
+    def fastReset(self):
+        QThread.msleep(50)
+        self.setDataTerminalReady(True)
+        self.setDataTerminalReady(False)
+
+    def sendMessage(self, data):
+        message = struct.pack(">BBHB", 0x1B, self.seq, len(data), 0x0E)
+        for c in data:
+            message += struct.pack(">B", c)
+        checksum = 0
+        for c in message:
+            checksum ^= c
+        message += struct.pack(">B", checksum)
+        try:
+            print("----00")
+            self.write(message)
+            self.flush()
+            print("----11")
+        except:
+            raise ispBase.IspError("Serial send timeout")
+        self.seq = (self.seq + 1) & 0xFF
+        print("----222")
+        # time.sleep(1)
+        if self.waitForReadyRead(1000):
+            print("----33")
+            return self.recvMessage()
+        else:
+            print("----44")
+            raise ispBase.IspError("Serial recv timeout")
+
+    def recvMessage(self):
+        state = 'Start'
+        checksum = 0
+        while True:
+            s = self.read(1)
+            if len(s) < 1:
+                if self.waitForReadyRead(20):
+                    continue
+                else:
+                    raise ispBase.IspError("Serial read timeout")
+            b = struct.unpack(">B", s)[0]
+            checksum ^= b
+            if state == 'Start':
+                if b == 0x1B:
+                    state = 'GetSeq'
+                    checksum = 0x1B
+            elif state == 'GetSeq':
+                state = 'MsgSize1'
+            elif state == 'MsgSize1':
+                msgSize = b << 8
+                state = 'MsgSize2'
+            elif state == 'MsgSize2':
+                msgSize |= b
+                state = 'Token'
+            elif state == 'Token':
+                if b != 0x0E:
+                    state = 'Start'
+                else:
+                    state = 'Data'
+                    data = []
+            elif state == 'Data':
+                data.append(b)
+                if len(data) == msgSize:
+                    state = 'Checksum'
+            elif state == 'Checksum':
+                if checksum != 0:
+                    state = 'Start'
+                else:
+                    return data
 
 
 class DFUTool(QThread):
     print("DFUTool(QThread)")
     stateCallback = pyqtSignal([str], [Exception])
+
     progressCallback = pyqtSignal(int, int)
 
-    def __init__(self, parent, filename, callback=None):
+    def __init__(self, parent, port, speed, filename, callback=None):
         super(DFUTool, self).__init__()
-        print("----------------------")
         self.parent = parent
+        self.port = port
+        self.speed = speed
         self.filename = filename
-        self.progress = callback
+        self.callback = callback
+        self.programmer = None
         self.isWork = False
         self.finished.connect(self.done)
 
@@ -721,6 +912,7 @@ class DFUTool(QThread):
 
         def w(state):
             if state is False:
+                self.stateCallback[Exception].emit(portError(portError.errorOpen, port))
                 self.stateCallback[str].emit("Done!")
                 self.quit()
                 return
@@ -737,30 +929,40 @@ class DFUTool(QThread):
         self.thread = DFUSearch(self, kwargs=kwargs)
         self.thread.searchResults.connect(w)  # 异步完成后执行函数w
         self.thread.start()
+        self.isWork = True
 
     def cl_progress(self, addr, offset, size):
         """Prints a progress report suitable for use on the command line."""
+        print("offset", offset, "size", size)
         self.progressCallback.emit(offset, size)
 
+    def disconnect(self, QMetaObject_Connection=None):
+        print("QMetaObject_Connection")
+
     def run(self):
-        if self.progress is not None:
-            self.progressCallback.connect(self.progress)
-        print(self.args)
-        self.stateCallback[str].emit("read fils")
-        with open(self.args.path, "rb") as fin:
-            dfu_file = fin.read()
-
-        if dfu_file is None:
-            print("file is None")
-            return
-
         self.isWork = True
-
-        elem = {"addr": 134217728, "size": len(dfu_file), "data": dfu_file}
-
         try:
-            self.stateCallback[str].emit("Write file...")
-            write_elements([elem], self.args.mass_erase, progress=self.cl_progress)
+            with open(self.args.path, "rb") as fin:
+                dfu_file = fin.read()
+
+            if dfu_file is None:
+                print("file is None")
+                return
+            elem = {"addr": 134217728, "size": len(dfu_file), "data": dfu_file}
+
+            self.programmer = STM32Dev()
+
+            if self.callback is not None:
+                self.progressCallback.connect(self.callback)
+
+            if self.parent is None:
+                pass
+
+            else:
+                self.stateCallback[str].emit(self.tr("Programming..."))
+                # self.programmer.
+                write_elements([elem], self.args.mass_erase, progress=self.cl_progress)
+            exit_dfu()  # 退出DFU模式
         except Exception as err:
             if self.isInterruptionRequested():
                 print("int")
@@ -773,16 +975,13 @@ class DFUTool(QThread):
                     raise err
             self.isWork = False
         finally:
-            self.isWork = False
-            self.stateCallback[str].emit("Exiting DFU...")
-            print("Exiting DFU...")
-            exit_dfu()
-            # 退出DFU模式
-            print("Done...")
-            self.ude = None
+            self.stateCallback[str].emit("Done!")
+            self.programmer = None
 
     def isReady(self):
         return True
+        return self.programmer is not None and self.programmer.isConnected()
+
         try:
             status = get_status()
             print(status)
@@ -807,6 +1006,9 @@ class DFUTool(QThread):
             print("Failure!")
 
     def terminate(self):
+        if self.thread.isRunning():
+            self.thread.exit()
+
         self.requestInterruption()
         return super(DFUTool, self).terminate()
 
@@ -830,11 +1032,11 @@ class DFUSearch(QThread):
             devices = get_dfu_devices(**self.kwargs)
             attempts += 1
             print("搜索DFU设备", attempts)
-            if attempts > 10:
+            if attempts > 20:
                 self.searchResults.emit(False)
                 self.quit()
                 return
-            time.sleep(2)
+            time.sleep(1)
 
         self.searchResults.emit(True)
 

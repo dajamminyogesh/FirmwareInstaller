@@ -3,12 +3,14 @@
 
 block_cipher = None
 
-
+binaries = [
+   ('C:\\Windows\\System32\\libusb0.dll', '.'),
+]
 a = Analysis(['src\\firmwareInstaller.py'],
              pathex=['D:\\Work\\Project\\FirmwareInstaller'],
-             binaries=[],
+             binaries=binaries,
              datas=[('src\\ico.ico', '.')],
-             hiddenimports=[],
+             hiddenimports=['usb'],
              hookspath=[],
              hooksconfig={},
              runtime_hooks=[],
