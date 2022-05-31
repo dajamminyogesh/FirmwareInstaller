@@ -1,9 +1,11 @@
-'''
+"""
 Created on 2017年8月15日
 
 @author: CreatBot-SW
-'''
-
+"""
+#!/usr/bin/env python3
+# coding: utf-8
+import json
 import os
 import sys
 
@@ -14,7 +16,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtSerialPort import QSerialPortInfo, QSerialPort
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGroupBox, \
     QRadioButton, QGridLayout, QWidget, QProgressBar, QStatusBar, QComboBox, QLabel, \
-    QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QCheckBox
+    QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QCheckBox, QMessageBox
 
 from avr_isp.intelHex import formatError
 from avr_isp.ispBase import IspError
@@ -237,24 +239,28 @@ class mainWindow(QWidget):
 
     def portUpdate(self, forceUpdate=False):
         """ Auto 监听端口 """
+
         if self.autoRadio.isChecked():
             self.baudCombo.setCurrentText("115200")
             # self.portCombo.addItems(portList())
             self.portCombo.clear()
             for port in QSerialPortInfo.availablePorts():
-                if port.description() not in ["Arduino Mega 2560", "USB-SERIAL CH340", "USB 串行设备"]:  # 过滤2560和CH340
-                    continue
                 portInfo = QSerialPortInfo(port)
+                if port.description() not in ["Arduino Mega 2560", "USB-SERIAL CH340"]:  # 过滤2560和CH340
+                    if portInfo.vendorIdentifier() != 0x0483 or portInfo.productIdentifier() != 0x5740:
+                        continue
                 self.portCombo.addItem(port.portName() + " (" + port.description() + ")", (port.portName(), portInfo.vendorIdentifier()))
+
         else:
-            currentPortData = self.portCombo.currentText()
-            if forceUpdate or (currentPortData and currentPortData not in [port.portName() for port in QSerialPortInfo.availablePorts()]):
+            currentPortData = self.portCombo.currentData()
+            if forceUpdate or (currentPortData and currentPortData[0] not in [port.portName() for port in QSerialPortInfo.availablePorts()]):
+                currentPortText = self.portCombo.currentText()
                 self.portCombo.clear()
                 for port in QSerialPortInfo.availablePorts():
                     portInfo = QSerialPortInfo(port)
                     self.portCombo.addItem(port.portName() + " (" + port.description() + ")",
                                            (port.portName(), portInfo.vendorIdentifier()))
-                self.portCombo.setCurrentIndex(self.portCombo.findText(currentPortData))
+                self.portCombo.setCurrentIndex(self.portCombo.findText(currentPortText))
 
         self.portCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.baudCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -289,30 +295,41 @@ class mainWindow(QWidget):
         filesFilter = "firmware file (*.hex | *.bin)"
         hexFileDialog.setNameFilter(self.tr(filesFilter))
         hexFileDialog.setFileMode(QFileDialog.ExistingFile)
-        if (self.file.text() == ""):
+        if self.file.text() == "":
             hexFileDialog.setDirectory(QDir.home())  # 设置为Home目录
         else:
             fileDir = QDir(self.file.text())
             fileDir.cdUp()
-            if (fileDir.exists()):
+            if fileDir.exists():
                 hexFileDialog.setDirectory(fileDir)  # 设置为当前文件所在目录
             else:
                 hexFileDialog.setDirectory(QDir.home())
-        if (hexFileDialog.exec()):
+        if hexFileDialog.exec():
             self.file.setText(hexFileDialog.selectedFiles()[0])
 
     def installFile(self, notFromButton=True):
-        if self.portCombo.currentData() is None:
-            return
+        # if self.portCombo.currentData() is None:
+        #     return
 
         if self.file.text() == "":
             if not notFromButton:
                 self.selectFile()
                 self.installFile(True)
-        else:
-            if self.autoTimer.remainingTime() != -1:
-                self.autoTimer.stop()
 
+        else:
+            info = self.portCombo.currentData()
+            print(info)
+            is_bin = self.file.text().endswith(".bin") or self.file.text().endswith(".BIN")
+            is_hex = self.file.text().endswith(".HEX") or self.file.text().endswith(".hex")
+            if info and info[1] == 1155:
+                if not is_bin:
+                    QMessageBox.about(self, "提示", "此芯片仅支持(.bin)文件写入!")
+                    return
+            elif info and info[1] != 0:
+                if not is_hex:
+                    QMessageBox.about(self, "提示", "此芯片仅支持(.hex)文件写入!")
+                    return
+            # 更新UI
             self.portBox.setDisabled(True)
             self.fileBox.setDisabled(True)
             self.installBtn.setDisabled(True)
@@ -320,8 +337,13 @@ class mainWindow(QWidget):
             self.progress.show()
             self.resize()
 
-            info = self.portCombo.currentData()
-            if info[1] == 1155:
+            if info is not None:
+                if self.autoTimer.remainingTime() != -1:
+                    self.autoTimer.stop()
+            else:
+                self.autoTimer.start(1000)
+            print(info)
+            if info and info[1] == 1155:
                 print("DFU")
                 self.stopBtn.setEnabled(False)
                 self.statusBar.showMessage("Serial to DFU...")
@@ -337,20 +359,20 @@ class mainWindow(QWidget):
                     # QtWidgets.QMessageBox.about(self, "提示", "无法打开串口!")
                     return
 
-                data = bytes("M9999\r", encoding='utf-8')
+                data = bytes("M9999\r\n", encoding='utf-8')
                 data = QtCore.QByteArray(data)
                 serial.write(data)
 
                 self.statusBar.showMessage("Serial to dfu...")
 
-                self.task = DFUse(self, self.portCombo.currentData()[0], int(self.baudCombo.currentText()), self.file.text(),
+                self.task = DFUse(self, info[0], int(self.baudCombo.currentText()), self.file.text(),
                                   self.progressUpdate)
                 self.task.stateCallback[str].connect(self.stateUpdate)
                 self.task.stateCallback[Exception].connect(self.stateUpdate)
                 self.task.finished.connect(self.autoAction)  # 检查是否自动烧写，并启动。
                 # self.task.start()
 
-            elif info[1] != 0:
+            elif info and info[1] != 0:
                 print("串口")
                 self.stopBtn.setEnabled(True)
                 self.task = stk500v2Thread(self, info[0], int(self.baudCombo.currentText()),
@@ -498,6 +520,6 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:  # 关联hex文件自动安装
         win.portUpdate()
         win.file.setText(sys.argv[1])
-        win.installBtn.click()
+        # win.installBtn.click()
 
     sys.exit(app.exec())
