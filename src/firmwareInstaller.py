@@ -3,9 +3,11 @@ Created on 2017年8月15日
 
 @author: CreatBot-SW
 """
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 # coding: utf-8
-import json
+
+# !/usr/bin/env python3
+# coding: utf-8
 import os
 import sys
 
@@ -22,7 +24,8 @@ from avr_isp.intelHex import formatError
 from avr_isp.ispBase import IspError
 from avr_isp.stk500v2 import stk500v2Thread, portError
 from pydfu import DFUTool as DFUse
-
+from datetime import datetime
+import pydfu
 if getattr(sys, 'frozen', False):
     bundle_dir = sys._MEIPASS
 else:
@@ -67,7 +70,7 @@ class mainWindow(QWidget):
         self.setWindowIcon(QIcon(os.path.join(bundle_dir, "ico.ico")))
         self.setFixedSize(QSize(480, 240))
         self.setAcceptDrops(True)
-
+        """寻找串口设备"""
         self.portUpdateTimer = QTimer()
         self.portUpdateTimer.timeout.connect(self.portUpdate)
         self.portUpdateTimer.start(100)
@@ -241,6 +244,7 @@ class mainWindow(QWidget):
         """ Auto 监听端口 """
 
         if self.autoRadio.isChecked():
+
             self.baudCombo.setCurrentText("115200")
             # self.portCombo.addItems(portList())
             self.portCombo.clear()
@@ -251,9 +255,27 @@ class mainWindow(QWidget):
                         continue
                 self.portCombo.addItem(port.portName() + " (" + port.description() + ")", (port.portName(), portInfo.vendorIdentifier()))
 
+            # kwargs = {"idVendor": 0x0483, "idProduct": 0xdf11}
+            # # dful = pydfu.get_dfu_devices(**kwargs)
+            # # print(dful)
+            # for dfu in pydfu.get_dfu_devices(**kwargs):
+            #     pass
+                # dfu.set_configuration()
+                # print(dfu)
+                # for dev in dfu:
+                #     print("-------------------------------------------------------------------------")
+                #     print(dev)
+                # cfg = dfu.get_active_configuration()
+                # print(cfg)
+                # print(cfg[(0, 0)])
+
+
+
+
         else:
             currentPortData = self.portCombo.currentData()
-            if forceUpdate or (currentPortData and currentPortData[0] not in [port.portName() for port in QSerialPortInfo.availablePorts()]):
+            if forceUpdate or (
+                    currentPortData and currentPortData[0] not in [port.portName() for port in QSerialPortInfo.availablePorts()]):
                 currentPortText = self.portCombo.currentText()
                 self.portCombo.clear()
                 for port in QSerialPortInfo.availablePorts():
@@ -261,6 +283,8 @@ class mainWindow(QWidget):
                     self.portCombo.addItem(port.portName() + " (" + port.description() + ")",
                                            (port.portName(), portInfo.vendorIdentifier()))
                 self.portCombo.setCurrentIndex(self.portCombo.findText(currentPortText))
+                kwargs = {"idVendor": 0x0483, "idProduct": 0xdf11}
+                dful = pydfu.get_dfu_devices(**kwargs)
 
         self.portCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.baudCombo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -307,14 +331,42 @@ class mainWindow(QWidget):
         if hexFileDialog.exec():
             self.file.setText(hexFileDialog.selectedFiles()[0])
 
-    def installFile(self, notFromButton=True):
-        # if self.portCombo.currentData() is None:
-        #     return
+    def installDFU(self, notFromButton=True):
+        self.statusBar.showMessage("Serial to dfu...")
 
+        self.task = DFUse(self, None, int(self.baudCombo.currentText()), self.file.text(),
+                          self.progressUpdate)
+        self.task.stateCallback[str].connect(self.stateUpdate)
+        self.task.stateCallback[Exception].connect(self.stateUpdate)
+        self.task.finished.connect(self.autoAction)  # 检查是否自动烧写，并启动。
+
+
+    def installFile(self, notFromButton=True):
+
+        print("installFile")
         if self.file.text() == "":
             if not notFromButton:
                 self.selectFile()
                 self.installFile(True)
+            return
+
+        kwargs = {"idVendor": 0x0483, "idProduct": 0xdf11}
+        if len(pydfu.get_dfu_devices(**kwargs)) > 0:
+            print("DEF")
+            self.statusBar.showMessage("dfu...")
+
+            self.task = DFUse(self, None, int(self.baudCombo.currentText()), self.file.text(),
+                              self.progressUpdate)
+            self.task.stateCallback[str].connect(self.stateUpdate)
+            self.task.stateCallback[Exception].connect(self.stateUpdate)
+            self.task.finished.connect(self.autoAction)  # 检查是否自动烧写，并启动。
+            # 更新UI
+            self.portBox.setDisabled(True)
+            self.fileBox.setDisabled(True)
+            self.installBtn.setDisabled(True)
+
+            self.progress.show()
+            self.resize()
 
         else:
             info = self.portCombo.currentData()
@@ -455,6 +507,7 @@ class mainWindow(QWidget):
 
     def progressUpdate(self, cur, total):
         """ 进度条 """
+        print(total, cur)
         self.progress.setMaximum(total)
         self.progress.setValue(cur)
 
@@ -520,6 +573,6 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:  # 关联hex文件自动安装
         win.portUpdate()
         win.file.setText(sys.argv[1])
-        # win.installBtn.click()
+        win.installBtn.click()
 
     sys.exit(app.exec())

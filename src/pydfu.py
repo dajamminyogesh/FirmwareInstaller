@@ -1026,6 +1026,7 @@ class DFUTool(QThread):
 
             else:
                 self.stateCallback[str].emit(self.tr("Programming..."))
+                # write_memory(134217728, dfu_file, progress=self.cl_progress, progress_addr=134217728, progress_size=len(dfu_file))
                 write_elements([elem], False, progress=self.cl_progress)
             exit_dfu()  # 退出DFU模式
 

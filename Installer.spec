@@ -5,11 +5,12 @@ block_cipher = None
 
 binaries = [
    ('C:\\Windows\\System32\\libusb0.dll', '.'),
+   ('C:\\Windows\\System32\\libusbK.dll', '.'),
    ('C:\\Windows\\System32\\libusb-1.0.dll', '.'),
-    ('C:\\Windows\\System32\\libusbK.dll', '.'),
    ('C:\\Windows\\System32\\winusb.dll', '.'),
-   ('C:\\Windows\\System32\\winusb.sys', '.'),
    ('C:\\Windows\\System32\\WinUSBCoInstaller2.dll', '.'),
+   ('C:\\Windows\\System32\\drivers\\libusbK.sys', '.'),
+   ('C:\\Windows\\System32\\drivers\\usbser.sys', '.')
 ]
 a = Analysis(['src\\firmwareInstaller.py'],
              pathex=['D:\\Work\\Project\\FirmwareInstaller'],
