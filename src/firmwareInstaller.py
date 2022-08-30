@@ -260,14 +260,14 @@ class mainWindow(QWidget):
             # # print(dful)
             # for dfu in pydfu.get_dfu_devices(**kwargs):
             #     pass
-                # dfu.set_configuration()
-                # print(dfu)
-                # for dev in dfu:
-                #     print("-------------------------------------------------------------------------")
-                #     print(dev)
-                # cfg = dfu.get_active_configuration()
-                # print(cfg)
-                # print(cfg[(0, 0)])
+            # dfu.set_configuration()
+            # print(dfu)
+            # for dev in dfu:
+            #     print("-------------------------------------------------------------------------")
+            #     print(dev)
+            # cfg = dfu.get_active_configuration()
+            # print(cfg)
+            # print(cfg[(0, 0)])
 
 
 
